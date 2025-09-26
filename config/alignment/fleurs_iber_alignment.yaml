@@ -1,0 +1,12 @@
+lang_pairs: ["en_ca", "en_es", "en_pt"]
+
+audio:
+  dir: /gpfs/projects/bsc88/speech/data/raw_data/fleurs/en_us/audio/test/
+  tsv: /gpfs/projects/bsc88/speech/research/scripts/Jacobo/s2t/input_att/captum/data_fleurs/tsv/{lang_pair}.test.tsv
+
+huberts:
+  tokens_path: /gpfs/projects/bsc88/speech/research/scripts/Jacobo/s2t/input_att/captum/results/s2_TA-7b-ins_mhubert_st-jacobo_v4/s2tt-cot/fleurs-test-aligned_huberts/{lang_pair}.audio_target.txt
+  token_dur_ms: 40
+
+output_path: /gpfs/projects/bsc88/speech/research/scripts/Jacobo/s2t/input_att/captum/results/s2_TA-7b-ins_mhubert_st-jacobo_v4/s2tt-cot/fleurs-test-aligned_huberts
+
