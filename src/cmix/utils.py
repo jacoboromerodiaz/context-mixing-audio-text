@@ -48,7 +48,7 @@ def load_attr_method(method: str, model, tokenizer):
     else:
         raise ValueError("Not implemented")
     
-# hard coded sets of methods for LLMs in captum
+# hard coded method families
 GRADIENT_BASED = {
     "layer-integrated-gradients",
     "gradient-shap",
@@ -60,59 +60,94 @@ PERTURBATION_BASED = {
     "lime",
     "shapley-values",
 }
-    
-def build_captum_input(
-    attr_method: str,
-    template: str,
-    values: Dict[str, str],
-    mask: Dict[str, int],
-    skip_tokens: List[str],
+
+def is_gradient_method(method: str) -> bool:
+    return method in GRADIENT_BASED
+
+def _build_captum_input(
+    *, attr_method: str, template: str, values: dict, mask: dict, skip_tokens: list[str]
 ):
-    """
-    Returns a Captum input object based on the specified mode, due to differences in the input requirements.
-    """
-    mode = "gradient" if attr_method in GRADIENT_BASED else "perturbation"
-    if mode == "gradient":
+    if is_gradient_method(attr_method):
+        # token-level input: pass skip_tokens here
         return TextTokenInput(
             template,
             values=values,
             mask=mask,
-            skip_tokens=skip_tokens
+            skip_tokens=skip_tokens,
         )
-    elif mode == "perturbation":
+    else:
+        # template-level input: NO skip_tokens arg here
         return TextTemplateInput(
             template,
             values=values,
             mask=mask,
         )
+
+def call_attribute(
+    *, 
+    attr_method: str, 
+    template: str, 
+    values: dict, 
+    mask: dict, 
+    llm_attr: any, 
+    generated_text: str,
+    skip_tokens: list[str], 
+    attribution_kwargs: dict = None, 
+):
+    captum_inp = _build_captum_input(
+        attr_method=attr_method,
+        template=template,
+        values=values,
+        mask=mask,
+        skip_tokens=skip_tokens,
+    )
+    if is_gradient_method(attr_method):
+        # gradient-style: do NOT pass skip_tokens here
+        return llm_attr.attribute(
+            captum_inp,
+            target=generated_text,
+            **attribution_kwargs,
+        )
     else:
-        raise ValueError(f"Unknown attribution mode: {mode}")
+        # perturbation-style: pass skip_tokens here
+        return llm_attr.attribute(
+            captum_inp,
+            target=generated_text,
+            skip_tokens=skip_tokens,
+            **attribution_kwargs,
+        )
+
     
 def _display_word_from_key(key: str) -> str:
     """
-    Normaliza claves con índice para mostrarlas sin el índice.
-    Soporta formatos como "12:word" o "(12,word)"; en caso contrario devuelve la clave tal cual.
+    Normalizes keys with index to display them without the index.
+    Supports formats like "12:word" or "(12,word)"; otherwise returns the key as is.
     """
-    # Formato (idx,word)
+    # Format (idx,word)
     if key.startswith("(") and key.endswith(")") and "," in key:
         inner = key[1:-1]
         parts = inner.split(",", 1)
         if len(parts) == 2:
             return parts[1].strip()
-    # Formato idx:word
+    # Format idx:word
     if ":" in key:
         left, right = key.split(":", 1)
         if left.isdigit():
             return right.strip()
     return key
 
-
 def build_audio_spans(audio_dict: Dict[str, Iterable]) -> Tuple[List[str], List[int], List[int]]:
     """
-    Devuelve:
-      - audio_words: ['/' + palabra + '/'] en orden de inserción
-      - audio_start_idx: inicios acumulados (0-based)
-      - audio_end_idx: finales EXCLUSIVOS (uno-pasado-del-último)
+    Given a dictionary mapping words to lists of tokens, constructs word spans using the hubert tokens.
+    
+    Returns:
+      - audio_words: ['/' + word + '/'] in order
+      - audio_start_idx: start indices of words (0-based)
+      - audio_end_idx: end indices of words (0-based, inclusive)
+    
+    Example:
+        input: {(0, 'more'): ['\U000f0108', '\U000f0108'], (1, 'than'): ['\U000f0119', '\U000f00d5']}
+        output: (['/more/', '/than/'], [0, 1], [2, 3])
     """
     audio_words: List[str] = []
     audio_start_idx: List[int] = []
@@ -255,9 +290,18 @@ def collapse_multiple_spans(
     reduce: str = "mean",
 ) -> LLMAttributionResult:
     """
-    Colapsa varios rangos [start_i, end_i] -> una columna cada uno,
-    reemplazando los nombres por names[i]. Equivalente a llamar varias
-    veces a collapse_input_span. Se procesan de derecha a izquierda.
+    Collapses multiple spans [start_i, end_i] -> one column each,
+    replacing names with names[i]. Equivalent to calling 
+    collapse_input_span multiple times.
+    Spans are processed from right to left.
+    
+    Example:
+        starts = [0, 3]
+        ends = [1, 4]
+        names = ["/hello/", "/world/"]
+        
+        output: token_attr with columns 0-1 replaced by "/hello/" and
+                columns 3-4 replaced by "/world/"
     """
     if len(starts) != len(ends):
         raise ValueError("starts y ends deben tener la misma longitud.")
@@ -266,17 +310,17 @@ def collapse_multiple_spans(
     if names is None:
         names = [f"[SPAN_{i}]" for i in range(n)]
     elif len(names) != n:
-        raise ValueError("Si se proporciona, names debe tener la misma longitud que starts/ends.")
+        raise ValueError("If given, names should have the same length as starts/ends.")
 
     spans = sorted(zip(starts, ends, names), key=lambda x: x[0])  # ascendente
     for i in range(len(spans)):
         s, e, _ = spans[i]
         if e < s:
-            raise ValueError(f"Span inválido: ({s}, {e})")
+            raise ValueError(f"Invalid span: ({s}, {e})")
         if i > 0:
             prev_s, prev_e, _ = spans[i-1]
             if s <= prev_e:  # solapan (o contiguos con s == prev_e+1 son válidos si quieres)
-                raise ValueError(f"Spans solapados o no ordenados: ({prev_s},{prev_e}) y ({s},{e})")
+                raise ValueError(f"Overlapped spans: ({prev_s},{prev_e}) y ({s},{e})")
 
     for s, e, nm in sorted(spans, key=lambda x: x[0], reverse=True):
         attr_res = _collapse_input_span(attr_res, s, e, nm, reduce=reduce)
@@ -285,8 +329,8 @@ def collapse_multiple_spans(
 
 def save_attr_plot(attr_res, output_dir, filename, *, dpi=200):
     """
-    Genera el plot con show=False, guarda en output_dir/plots/filename
-    y cierra la figura. Devuelve la ruta completa.
+    Generates the plot with show=False, saves to output_dir/plots/filename,
+    and closes the figure. Returns the full path.
     """
     res = attr_res.plot_token_attr(show=False)
 

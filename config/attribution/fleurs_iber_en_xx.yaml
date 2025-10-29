@@ -1,0 +1,22 @@
+model: /gpfs/projects/bsc88/speech/mm_s2st/outputs/checkpoints/speech_salamandra/salamandrast-jacobo/stage2/s2_TA-7b-ins_mhubert_st-jacobo_v2/
+
+data:
+  entire_seq_file: /gpfs/projects/bsc88/speech/research/scripts/Jacobo/s2t/input_att/captum/results/s2_TA-7b-ins_mhubert_st-jacobo_v2/s2tt-cot/fleurs-iber/{lang_pair}.entire_sequence.txt
+  chunk_size: 1
+  splitter: '(\\nTranslate to (?:.+?)<\\|im_end\\|>\\n<\\|im_start\\|>assistant\\n)'
+  input_translation: false
+  aligned_huberts_file: /gpfs/projects/bsc88/speech/research/scripts/Jacobo/s2t/input_att/captum/results/s2_TA-7b-ins_mhubert_st-jacobo_v2/s2tt-cot/fleurs-iber/{lang_pair}.aligned_huberts.txt
+  deduplicate_huberts: true
+
+attr_params:
+  method: shapley-values
+  lang_pairs: ["en_ca", "en_es", "en_pt"]
+  skip_tokens: ["<0x0A>", "<|im_end|>", "<|im_start|>", " assistant", "assistant", "assistant\\", "user", "\n", "n", "\\", "<s>", "\\", "\\n"]
+  attribution_kwargs:
+    n_samples: 25
+
+results:
+  output_dir: /gpfs/projects/bsc88/speech/research/scripts/Jacobo/s2t/input_att/captum/outputs/v6/
+  plot_every: 100
+  
+resume: true

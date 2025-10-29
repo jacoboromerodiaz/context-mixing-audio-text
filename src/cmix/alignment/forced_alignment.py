@@ -1,8 +1,6 @@
 import torch
 import torchaudio
 from typing import List
-import IPython
-import matplotlib.pyplot as plt
 from torchaudio.pipelines import MMS_FA as bundle
 import re
 import csv
@@ -13,7 +11,7 @@ from bisect import bisect_right, bisect_left
 import argparse
 import yaml
 
-# Script based on https://docs.pytorch.org/audio/main/tutorials/forced_alignment_for_multilingual_data_tutorial.htmldevice = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# Script based on https://docs.pytorch.org/audio/main/tutorials/forced_alignment_for_multilingual_data_tutorial.html
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -21,17 +19,17 @@ def compute_alignments(waveform: torch.Tensor, transcript: List[str]):
     """
     Run MMS forced alignment and return (emission, token_spans).
     """
-    
     model = bundle.get_model().to(device)
     tokenizer = bundle.get_tokenizer()
     aligner = bundle.get_aligner()
     
+    model.eval()
     with torch.inference_mode():
         emission, _ = model(waveform.to(device))
         token_spans = aligner(emission[0], tokenizer(transcript))
     return emission, token_spans
     
-def word_spans(waveform, spans, num_frames, sample_rate=bundle.sample_rate):
+def word_spans(waveform, spans, num_frames, sample_rate):
     """
     Convert token spans (frame idx) to (start_ms, end_ms) using the waveform length.
     """
@@ -71,12 +69,12 @@ def align_tokens_to_words(
         raise ValueError("time_stamps is empty.")
     n = len(time_stamps)
 
-    # Keep original indices and sort by start time (temporal order)
+    # keep original indices and sort by start time (temporal order)
     ts_with_idx = [(s, e, i) for i, (s, e) in enumerate(time_stamps)]
     ts_sorted = sorted(ts_with_idx, key=lambda x: x[0]) 
     order = [orig for (_, _, orig) in ts_sorted]       
 
-    # Build decision boundaries (centers or edges)
+    # build decision boundaries (centers or edges)
     if use_centers:
         centers = [(s + e) / 2.0 for (s, e, _) in ts_sorted]
         for i in range(1, n):
@@ -89,7 +87,7 @@ def align_tokens_to_words(
     bsearch = bisect_left if prefer_left_on_tie else bisect_right
     aligned_sorted = [[] for _ in range(n)]
 
-   # Initial token assignment by token mid-time
+   # initial token assignment by token mid-time
     for i, tok in enumerate(tokens):
         tok_mid = (i + 0.5) * token_dur_ms
         j = bsearch(boundaries, tok_mid)
@@ -97,7 +95,7 @@ def align_tokens_to_words(
         elif j >= n: j = n - 1
         aligned_sorted[j].append(tok)
 
-    # Guarantee at least one token per word if requested
+    # guarantee at least one token per word if requested
     if enforce_min_one and len(tokens) >= n:
         empties = [j for j, lst in enumerate(aligned_sorted) if len(lst) == 0]
 
@@ -138,20 +136,47 @@ def align_tokens_to_words(
                 tok = aligned_sorted[donor].pop(0)
                 aligned_sorted[j].append(tok)
 
-    # Restore original word order
+    # restore original word order
     aligned = [None] * n
     for pos_temporal, orig_i in enumerate(order):
         aligned[orig_i] = aligned_sorted[pos_temporal]
 
     return aligned
+                    
+def parse_args():
+    p = argparse.ArgumentParser(description="Forced alignment with MMS (torchaudio) using YAML config")
+    p.add_argument("--config", required=True, help="Path to YAML config")
+    return p.parse_args()
+
+def load_config(cli_args) -> dict:
+    """
+    Load and validate the YAML configuration file.
+    """
+    with open(cli_args.config, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f) or {}
+    
+    required = ["audio", "huberts", "output_path", "lang_pairs"]
+    missing = [k for k in required if k not in config]
+    if missing:
+        raise ValueError(f"Missing required keys in YAML: {missing}")
+    
+    # validate subkeys
+    audio_keys = ["dir", "tsv"]
+    missing_audio = [k for k in audio_keys if k not in config.get("audio", {})]
+    if missing_audio:
+        raise ValueError(f"Missing required audio subkeys in YAML: {missing_audio}")
+    
+    return config
+
 
 def main(config):
-    # Import required config parameters
     audio_dir = config.get("audio").get("dir")
     tsv_path = config.get("audio").get("tsv")
     output_path = config.get("output_path")
     tokens_path = config.get("huberts").get("tokens_path")
-    token_dur_ms = config.get("huberts").get("token_dur_ms", 40)
+    token_dur_ms = config.get("huberts", {}).get("token_dur_ms", 40)
+    if token_dur_ms <= 0:
+        raise ValueError(f"Invalid token_dur_ms: {token_dur_ms}. Must be positive.")
     
     lang_pairs = config.get("lang_pairs")
     
@@ -166,39 +191,42 @@ def main(config):
             header = next(reader, None)  # skip header
             tsv = list(reader)
 
-        # Output per language pair
+        if len(tokens_txt) != len(tsv):
+            raise ValueError(f"Mismatch in lengths: tokens_txt ({len(tokens_txt)}) and tsv ({len(tsv)})")
+
         output_file = os.path.join(output_path, f"{lang_pair}.aligned_huberts.txt")
         with open(output_file, "w", encoding="utf-8") as out:
             for txt_row, tsv_row in tqdm(
                 zip(tokens_txt, tsv),
                 total=len(tokens_txt),
-                desc=f"{lang_pair}",
+                desc=f"{lang_pair} - Processing {audio_wav}",
                 dynamic_ncols=True,
             ):
-                # Hubert tokens and corresponding audio file + transcription
+                # hubert tokens and corresponding audio file + transcription
                 token_list = [t for t in txt_row.strip().split(" ") if t]
                 
-                # Dataset metadata from TSV
                 audio_wav = tsv_row[1]       
                 transcription = tsv_row[2] 
-
-                # Normalize and split transcript into words
                 transc_norm = normalize_uroman(transcription)
                 transcript = transc_norm.split()
                 
-                # Load audio
-                waveform, sample_rate = torchaudio.load(os.path.join(audio_dir, audio_wav))
-                assert sample_rate == bundle.sample_rate, "Sample rate must match MMS bundle sample rate."
+                try:
+                    waveform, sample_rate = torchaudio.load(os.path.join(audio_dir, audio_wav))
+                except FileNotFoundError:
+                    print(f"Audio file not found: {audio_wav}")
+                    continue
+                except Exception as e:
+                    print(f"Error loading audio file {audio_wav}: {e}")
+                    continue
                 
-                # MMS forced alignment
+                waveform = waveform.to(device)
                 emission, token_spans = compute_alignments(waveform, transcript)
                 num_frames = emission.size(1)
                 time_stamps = []
                 for i, spans in enumerate(token_spans):
-                    start_ms, end_ms = word_spans(waveform, spans, num_frames, transcript[i])
+                    start_ms, end_ms = word_spans(waveform, spans, num_frames, bundle.sample_rate)
                     time_stamps.append((start_ms, end_ms))
                 
-                # Map fixed-duration tokens -> words
                 aligned_tokens = align_tokens_to_words(
                     time_stamps,
                     token_list,
@@ -208,25 +236,16 @@ def main(config):
                     enforce_min_one=True 
                 )
 
-                mapping = {(i,transcript[i]): aligned_tokens[i] for i in range(len(transcript))}
-                out.write(str(mapping) + "\n")
+                mapping = {
+                    (i, transcript[i]): aligned_tokens[i]
+                    for i in range(len(transcript))
+                }
+                try:
+                    out.write(json.dumps(mapping) + "\n")
+                except Exception as e:
+                    print(f"[ERROR] Failed to write to output file {output_file}: {e}")
 
             print(f"Saved at: {output_file}")
-                    
-def parse_args():
-    p = argparse.ArgumentParser(description="Forced alignment with MMS (torchaudio) using YAML config")
-    p.add_argument("--config", required=True, help="Path to YAML config")
-    return p.parse_args()
-
-def load_config(cli_args) -> dict:
-    with open(cli_args.config, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f) or {}
-    
-    required = ["audio", "huberts", "output_path", "lang_pairs"]
-    missing = [k for k in required if k not in config]
-    if missing:
-        raise ValueError(f"Missing required keys in YAML: {missing}")
-    return config
 
 if __name__ == "__main__":
     cli_args = parse_args()

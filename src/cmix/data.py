@@ -4,7 +4,6 @@ import torch
 from typing import Optional, Dict, List, Any, Tuple
 from transformers import LlamaForCausalLM, AutoTokenizer
 import argparse
-import json
 from pathlib import Path
 import os
 import yaml
@@ -30,9 +29,6 @@ def _load_mappings(txt_path):
     """
     Load a .txt file where each line contains a dictionary in str(dict) format.
     Returns a list of dictionaries.
-
-    Raises:
-        FileNotFoundError: if the file does not exist.
     """
     if not os.path.exists(txt_path):
         msg = (f"Archivo {txt_path} not found. please run forced_alignment.py to obtain "
@@ -52,27 +48,27 @@ def _load_mappings(txt_path):
                     print(f"Error parsing line: {line}\n{e}")
     return mappings
 
-def load_data(data_cfg):
+def load_data(data_cfg, lang_pair):
     """
-    Read the full sequence file, split it into samples of `chunk_size`,
-    load HuBERT alignments, and (optionally) deduplicate their tokens.
+    Read the full sequence file, split it into samples of `chunk_size`.
+    Alsos load HuBERT alignments, and (optionally) deduplicate their tokens.
     Returns:
         - original_prompts: list of original prompts (or the whole chunk if input_transl=True)
         - generated_texts: list with the generated text after the splitter
         - aligned_huberts: list of dicts (possibly deduplicated)
     """
     # Retrieving data from files
-    original_prompts, generated_texts = _load_prompts(data_cfg)
+    original_prompts, generated_texts = _load_prompts(data_cfg, lang_pair)
     
     # Retrieving aligned hubert tokens
-    aligned_huberts_file = data_cfg.get("aligned_huberts_dir", None)
+    aligned_huberts_file = data_cfg.get("aligned_huberts_file", None).format(lang_pair=lang_pair)
     aligned_huberts = _load_mappings(aligned_huberts_file)
     if data_cfg.get("deduplicate_huberts", False):
         aligned_huberts = _deduplicate_huberts(aligned_huberts)
 
     return original_prompts, generated_texts, aligned_huberts
 
-def _load_prompts(data_cfg):
+def _load_prompts(data_cfg, lang_pair):
     data_file = data_cfg.get("file", None)
     chunk_size = data_cfg.get("chunk_size", None)
     
@@ -84,9 +80,10 @@ def _load_prompts(data_cfg):
 
     # Divide into prompts and generated texts
     original_prompts, generated_texts = [], []
+    
     # mode 1: entire_seq_file + splitter
     if "entire_seq_file" in data_cfg:
-        entire_seq_file = Path(data_cfg["file"])
+        entire_seq_file = Path(data_cfg["entire_seq_file"].format(lang_pair=lang_pair))
         with open(entire_seq_file, "r", encoding="utf-8") as f:
             lines = f.readlines()
         chunks = ["".join(lines[i:i + chunk_size]) for i in range(0, len(lines), chunk_size)]
@@ -111,8 +108,8 @@ def _load_prompts(data_cfg):
 
     # mode 2: prompts_file + generated_file
     elif "prompts_file" in data_cfg and "generated_file" in data_cfg:
-        prompts_file = Path(data_cfg["prompts_file"])
-        generated_file = Path(data_cfg["generated_file"])
+        prompts_file = Path(data_cfg["prompts_file"].format(lang_pair=lang_pair))
+        generated_file = Path(data_cfg["generated_file"].format(lang_pair=lang_pair))
         with open(prompts_file, "r", encoding="utf-8") as f:
             original_prompts = [line.strip() for line in f if line.strip()]
         with open(generated_file, "r", encoding="utf-8") as f:
@@ -128,11 +125,11 @@ def _deduplicate_huberts(aligned_huberts: List[Dict[str, List[Any]]]
     Deduplicate HuBERT token lists per word, removing consecutive duplicates,
     trimming from the start any token equal to the previous word's last token,
     and enforcing min-1 token per word without inflating the total count by
-    borrowing a token from the nearest neighbor with >1 tokens. Additionally,
-    if a word has exactly 1 token and it equals the previous word's last token,
-    attempt to replace it by borrowing a different token from the previous word.
+    borrowing a token from the nearest neighbor with >1 tokens. 
+    
+    Additionally, if a word has exactly 1 token and it equals the previous word's 
+    last token, attempt to replace it by borrowing a different token from the previous word.
     """
-    print("Deduplicated hubert tokens")
     deduplicated_huberts: List[Dict[str, List[Any]]] = []
     for d in aligned_huberts:
         # 1) Primera pasada: deduplicar internos y recortar solape con prev_last
@@ -233,10 +230,12 @@ def _deduplicate_huberts(aligned_huberts: List[Dict[str, List[Any]]]
             new_d[(idx, key)] = collapsed_lists[idx_i]
 
         deduplicated_huberts.append(new_d)
+    print("Deduplicated hubert tokens")
+    
     return deduplicated_huberts
 
 def _norm(s: Optional[str]) -> str:
-    """Normalize: None -> '', collapse line breaks and trim."""
+    """Collapse line breaks and trim."""
     s = s or ""
     return re.sub(r'(?:\r\n|\r|\n|\\n)+', ' ', s).strip()
 
@@ -329,8 +328,11 @@ def _build_mask(aligned_hubert_words: Dict[str, List[Any]],
 
     return mask
 
-def extract_template(input_text: str, tokenizer, aligned_hubert_words: Dict[str, List[Any]],
-                     input_transl: bool = False):
+def extract_template(input_text: str, 
+                     tokenizer, 
+                     aligned_hubert_words: Dict[str, List[Any]],
+                     input_translation: bool = False):
+    
     # --- parse blocks ---
     audio_segment, lang1, lang2 = _parse_user_blocks(input_text)
     transc_segment, transl_segment = _parse_assistant_blocks(input_text, input_transl)

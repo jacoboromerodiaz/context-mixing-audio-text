@@ -74,7 +74,8 @@ def run_attribution(
             skip_tokens=skip_tokens,
             attribution_kwargs=attribution_kwargs,
         )
-
+        
+        # NO MIRADO AUN
         audio_words, audio_start_idx, audio_end_idx = build_audio_spans(aligned_hubert_words)
         format_attr_res = collapse_multiple_spans(
             attr_res, audio_start_idx, audio_end_idx, audio_words, reduce="mean"
