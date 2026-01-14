@@ -1,0 +1,21 @@
+[project]
+name = "context-mixing-audio-text"
+version = "0.1.0"
+description = "Context mixing for audio/text experiments"
+readme = "README.md"
+requires-python = ">=3.9,<3.12"
+dependencies = [
+  "tqdm",
+  "transformers",
+  "numpy",
+  "torch",
+  "matplotlib",
+  "captum",
+  "inseq",
+  "pyyaml",
+]
+
+[tool.uv.workspace]
+members = [
+  "context-mixing-audio-text",
+]
