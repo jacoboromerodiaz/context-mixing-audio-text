@@ -3,6 +3,7 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import csv
 
 from captum.attr import (
     LayerIntegratedGradients,
@@ -165,49 +166,46 @@ def build_audio_spans(audio_dict: Dict[str, Iterable]) -> Tuple[List[str], List[
 
     return audio_words, audio_start_idx, audio_end_idx
 
-def group_scores(attr_res, audio_len, transc_len, tsv_path: Optional[str] = None, mode: str = "l1"):
+def group_scores(attr_res, audio_len, transc_len, tsv_path, input_translation, mode: str = "l1"):
     """
-    Calcula proporciones de atribución agrupadas en bloques:
+    Calculates grouped attribution scores into blocks.
       - audio
       - transcript
-      - translation
       - transcribe_in_token
       - translate_to_token
+      - translation (if input_translation is True)
 
     Args:
-        attr_res: objeto con .token_attr (lista de tensores [T_in] por cada token generado)
-        audio_len: número de columnas de audio
-        transc_len: número de columnas de transcript
-        tsv_path: opcional, para logging/guardar
-        mode: "softmax" (default) o "l1"
+        attr_res: object with .token_attr (tensors [T_in] for every generated token)
+        audio_len: number of audio columns
+        transc_len: number of transcript columns
+        input_translation: if True, includes translation columns
+        tsv_path: path to TSV file to save scores
+        mode: "softmax" or "l1" (default)
     """
-
-    # apilar en matriz [T_out, T_in]
+    # matrix [T_out, T_in]
     new_token_attr = attr_res.token_attr   # [T_out, T_in]
-    new_token_attr = new_token_attr[:, :]              # quitar 2 filas iniciales si corresponde
 
     if mode == "softmax":
-        # softmax fila a fila
+        # softmax
         norm_attr_res = torch.softmax(new_token_attr, dim=1)
     elif mode == "l1":
-        # normalización L1 fila a fila con valores absolutos
+        # normalization L1
         norm_attr_res = new_token_attr.abs()
         norm_attr_res = norm_attr_res / (norm_attr_res.sum(dim=1, keepdim=True).clamp_min(1e-12))
     else:
-        raise ValueError("mode debe ser 'softmax' o 'l1'")
+        raise ValueError("mode must be 'softmax' or 'l1'")
 
-    # cortes
-    audio_attr     = norm_attr_res[:, :audio_len].sum(dim=1) 
-    transc_attr    = norm_attr_res[:, audio_len+1:audio_len+1+transc_len].sum(dim=1)     # transcript después del audio + "english"
-    #transl_attr    = norm_attr_res[:, audio_len+2+transc_len:].sum(dim=1)                # después de transcript + "catalan"
-    transc_in_attr = norm_attr_res[:, audio_len]                             # token "TRANSCRIBE_IN"
-    transl_to_attr = norm_attr_res[:, audio_len+1+transc_len]                 # token "TRANSLATE_TO"
-
-    # medias por bloque
+    # hard coded indices, adapt to your template
+    audio_attr = norm_attr_res[:, :audio_len].sum(dim=1) 
+    transc_attr = norm_attr_res[:, audio_len+1:audio_len+1+transc_len].sum(dim=1) # transcript after audio + "english"
+    transc_in_attr = norm_attr_res[:, audio_len]  # token "TRANSCRIBE_IN"
+    transl_to_attr = norm_attr_res[:, audio_len+1+transc_len] # token "TRANSLATE_TO"
+    
     scores = {
         "audio": audio_attr.mean().item(),
         "transcript": transc_attr.mean().item(),
-        #"translation": transl_attr.mean().item(),
+        "translation": transl_attr.mean().item(),
         "transcribe_in_token": transc_in_attr.mean().item(),
         "translate_to_token": transl_to_attr.mean().item(),
     }
@@ -215,8 +213,12 @@ def group_scores(attr_res, audio_len, transc_len, tsv_path: Optional[str] = None
     print(f"[{mode.upper()}] AUDIO: {scores['audio']:.4f}, TRANSCRIPT: {scores['transcript']:.4f}, "
           f"Transcribe in _: {scores['transcribe_in_token']:.4f}, "
           f"Translate to _: {scores['translate_to_token']:.4f}")
+    
+    if input_translation: 
+        transl_attr = norm_attr_res[:, audio_len+2+transc_len:].sum(dim=1)              
+        scores["translation"] = transl_attr.mean().item()
+        print(f"TRANSLATION: {scores['translation']:.4f}")
 
-    # crear si no existe, anexar si existe)
     try:
         if tsv_path is None:
             logs_dir = os.path.join(os.getcwd(), "logs")
@@ -229,9 +231,17 @@ def group_scores(attr_res, audio_len, transc_len, tsv_path: Optional[str] = None
         with open(tsv_path, mode="a", encoding="utf-8") as f:
             if write_header:
                 f.write("AUDIO\tTRANSCRIPT\tTRANSCRIBE_IN\tTRANSLATE_TO\n")
+                if input_translation:
+                    f.write("TRANSLATION\n")
             f.write(
-                f"{scores['audio']:.6f}\t{scores['transcript']:.6f}\t{scores['transcribe_in_token']:.6f}\t{scores['translate_to_token']:.6f}\n"
+                f"{scores['audio']:.6f}\t{scores['transcript']:.6f}\t{scores['transcribe_in_token']:.6f}\t{scores['translate_to_token']:.6f}"
             )
+            if input_translation:
+                f.write(
+                    f"\t{scores['translation']:.6f}"
+                )
+            f.write("\n")
+                
     except Exception as e:
         print(f"[WARN] No se pudo escribir TSV: {type(e).__name__}: {e}")
 
@@ -249,10 +259,10 @@ def _collapse_input_span(
     start: int,
     end: int,
     new_name: str,
-    reduce: str = "mean",   # "sum" o "mean"
+    reduce: str = "mean",  # "sum" or "mean"
 ) -> LLMAttributionResult:
     if end < start:
-        raise ValueError("end debe ser >= start")
+        raise ValueError("end should be >= start")
 
     t = attr_res.token_attr  # esperado: (n_output_tokens, n_input_tokens)
 
@@ -266,14 +276,14 @@ def _collapse_input_span(
         agg = mid.sum(axis=1, keepdims=True) if reduce == "sum" else mid.mean(axis=1, keepdims=True)
         new_t = np.concatenate([t[:, :start], agg, t[:, end+1:]], axis=1)
     else:
-        raise TypeError("token_attr debe ser torch.Tensor o np.ndarray")
+        raise TypeError("token_attr should be torch.Tensor or np.ndarray")
 
     new_input_tokens = (
         attr_res.input_tokens[:start] + [new_name] + attr_res.input_tokens[end+1:]
     )
 
     if new_t.shape[1] != len(new_input_tokens):
-        raise RuntimeError("Desajuste entre columnas de token_attr y input_tokens.")
+        raise RuntimeError("Shape mismatch after collapsing span.")
 
     return LLMAttributionResult(
         seq_attr=attr_res.seq_attr,
@@ -327,23 +337,21 @@ def collapse_multiple_spans(
 
     return attr_res
 
-def save_attr_plot(attr_res, output_dir, filename, *, dpi=200):
+def save_attr_plot(*, attr_res, output_dir, filename, dpi=200):
     """
     Generates the plot with show=False, saves to output_dir/plots/filename,
-    and closes the figure. Returns the full path.
+    and closes the figure. 
     """
     res = attr_res.plot_token_attr(show=False)
 
-    # Algunas versiones devuelven (Figure, Axes); otras solo Figure
     if isinstance(res, tuple):
-        fig, ax = res
+        fig, _ = res
     else:
         fig = res
 
     if fig is None:
         raise RuntimeError(
-            "plot_token_attr devolvió None. Asegúrate de usar show=False "
-            "y de que tu versión devuelve la Figure."
+            "plot_token_attr returned None. Make sure to use show=False"
         )
 
     plots_dir = os.path.join(output_dir, "plots")
@@ -352,7 +360,6 @@ def save_attr_plot(attr_res, output_dir, filename, *, dpi=200):
     out_path = os.path.join(plots_dir, filename)
     fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
-    return out_path
 
 def resolve_resume_state(
     config: Dict[str, Any],

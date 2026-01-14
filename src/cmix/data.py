@@ -332,10 +332,16 @@ def extract_template(input_text: str,
                      tokenizer, 
                      aligned_hubert_words: Dict[str, List[Any]],
                      input_translation: bool = False):
+    """
+    From the full input text and aligned hubert tokens, extract:
+      - template: string with placeholders
+      - values: dict mapping placeholders to actual tokens/words
+      - mask: dict mapping placeholders to group indices
+    """
     
     # --- parse blocks ---
     audio_segment, lang1, lang2 = _parse_user_blocks(input_text)
-    transc_segment, transl_segment = _parse_assistant_blocks(input_text, input_transl)
+    transc_segment, transl_segment = _parse_assistant_blocks(input_text, input_translation)
 
     # --- normalize ---
     audio_segment = _norm(audio_segment)
@@ -343,7 +349,7 @@ def extract_template(input_text: str,
     transl_segment = _norm(transl_segment)
 
     # --- tokenize ---
-    token_lists = _tokenize_segments(tokenizer, audio_segment, transc_segment, transl_segment, input_transl)
+    token_lists = _tokenize_segments(tokenizer, audio_segment, transc_segment, transl_segment, input_translation)
 
     # --- alignment check (same assertion) ---
     total_audio_toks = sum(len(v) for v in aligned_hubert_words.values())
@@ -352,8 +358,8 @@ def extract_template(input_text: str,
     )
 
     # --- templates, values, mask ---
-    template = _build_template(token_lists, input_transl)
-    values = _build_values(token_lists, lang1, lang2, input_transl)
-    mask = _build_mask(aligned_hubert_words, token_lists, input_transl)
+    template = _build_template(token_lists, input_translation)
+    values = _build_values(token_lists, lang1, lang2, input_translation)
+    mask = _build_mask(aligned_hubert_words, token_lists, input_translation)
 
     return template, values, mask

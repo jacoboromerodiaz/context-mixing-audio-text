@@ -14,9 +14,8 @@ from utils import (
     compute_mean_scores_from_tsv,
     resolve_resume_state,
     call_attribute,
-    is_gradient_method,
 )
-
+    
 from data import (
     parse_args,
     load_model,
@@ -75,14 +74,16 @@ def run_attribution(
             attribution_kwargs=attribution_kwargs,
         )
         
-        # NO MIRADO AUN
         audio_words, audio_start_idx, audio_end_idx = build_audio_spans(aligned_hubert_words)
         format_attr_res = collapse_multiple_spans(
             attr_res, audio_start_idx, audio_end_idx, audio_words, reduce="mean"
         )
-        len_transc = sum("transctok" in key for key in values)
+        
+        # Group scores into AUDIO and TRANSCRIPT tokens
+        len_audio_tokens = len(audio_words)
+        len_transc_tokens = sum("transctok" in key for key in values)
         sft_attr_res = group_scores(
-            format_attr_res, len(audio_words), len_transc, tsv_path=tsv_path
+            format_attr_res, len_audio_tokens, len_transc_tokens, tsv_path=tsv_path, input_translation=input_translation
         )
 
         if output_dir and (i + 1) % plot_every == 0:
@@ -99,7 +100,7 @@ def main(config):
         out_dir_lang.mkdir(parents=True, exist_ok=True)
 
         llm_attr = load_attr_method(attr_method, model, tokenizer)
-        input_texts, generated_texts, aligned_huberts = load_data(data_cfg=data_cfg)
+        input_texts, generated_texts, aligned_huberts = load_data(data_cfg=data_cfg, lang_pair=lang_pair)
 
         # Handle resuming from previous runs
         if config.get("resume", None) or config.get("start_index", None):
