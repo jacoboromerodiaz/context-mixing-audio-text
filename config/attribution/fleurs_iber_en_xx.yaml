@@ -3,10 +3,13 @@ model: /gpfs/projects/bsc88/speech/mm_s2st/outputs/checkpoints/speech_salamandra
 data:
   entire_seq_file: /gpfs/projects/bsc88/speech/research/scripts/Jacobo/s2t/input_att/captum/results/s2_TA-7b-ins_mhubert_st-jacobo_v2/s2tt-cot/fleurs-iber/{lang_pair}.entire_sequence.txt
   chunk_size: 1
-  splitter: '(\\nTranslate to (?:.+?)<\\|im_end\\|>\\n<\\|im_start\\|>assistant\\n)'
   input_translation: false
   aligned_huberts_file: /gpfs/projects/bsc88/speech/research/scripts/Jacobo/s2t/input_att/captum/results/s2_TA-7b-ins_mhubert_st-jacobo_v2/s2tt-cot/fleurs-iber/{lang_pair}.aligned_huberts.txt
   deduplicate_huberts: true
+  prompt_splitter: (\\nTranslate to (?:.+?)<\\|im_end\\|>\\n<\\|im_start\\|>assistant\\n)
+  audio_regex: <\|im_start\|>user\s*(.*?)\s*Transcribe in ([\w\s]+)<\|im_end\|>
+  transl_lang_regex: Translate to ([\w\s]+)
+  assistant_regex: <\|im_start\|>assistant\s*(.*?)\s*(?=(<\|im_end\|>|$))
 
 attr_params:
   method: shapley-values
