@@ -5,24 +5,44 @@ It uses **Captum** to compute token-level attributions over both modalities.
 
 ---
 
+## Motivation
+
+When evaluating multimodal models that combine **audio** and **text**, it is important to understand which modality actually drives the model output.
+
+### 1. Modality attribution in SpeechLLMs
+
+Our first motivation is to study **SpeechLLMs** that take speech-derived audio representations together with text instructions or prompts. In this setting, we want to measure how much the final output depends on each modality.
+
+In particular, we focus on **SALAMANDRA-ST**, a **Chain-of-Thought (CoT)** speech translation system in which the input audio is first encoded into discrete units using **mHuBERT-25Hz**. Rather than translating directly from speech, SALAMANDRA-ST first **transcribes** these speech-derived representations and then **translates** the resulting text. In principle, this CoT setup should make explicit use of the audio tokens during the transcription step, since the model has direct access to the encoded speech signal. Our goal is to analyze whether this is actually the case in practice.
+
+More specifically, we are interested in the attribution of the generated translation with respect to:
+- the **audio input**, and
+- the **textual context or prompt**.
+
+<p align="center">
+  <img src="images/speechllm.png" alt="SpeechLLM multimodal attribution setup" width="900"/>
+</p>
+
+A current limitation is that frameworks such as **Captum** do not yet provide a straightforward way to attribute the full **language modeling / decoding process**, i.e. the sequence of tokens generated during translation. This makes the study less interpretable than desired. A future version of the project may incorporate this once such functionality becomes available.
+
+### 2. Word-level audio attribution through forced alignment
+
+Our second motivation is specific to the **audio modality**. Existing attribution frameworks such as Captum do not provide directly interpretable scores over audio in a form that is useful for analysis. In practice, attribution over individual audio units or tokens is often too fine-grained to be meaningful on its own, inspecting isolated audio tokens is not very informative. Instead, we want to aggregate audio contribution at the level of **words**, which is much easier to interpret. To do this, we use forced alignment to obtain word-level start and end times, and then map the corresponding mHuBERT units to each word span. Since the mHuBERT representation is extracted at 25 Hz, each token corresponds to 40 ms of audio, which allows us to assign units to a given word according to where that word begins and ends in time. We then aggregate the attribution scores of all units aligned to the same word.
+
+<p align="center">
+  <img src="images/alignment.png" alt="Forced alignment for word-level audio attribution aggregation" width="900"/>
+</p>
+
+---
+
 ## Overview
 
 The project includes:
+
 - **Attribution analysis** (`src/cmix/main.py`): unified pipeline for gradient- and perturbation-based interpretability.
 - **Data management** (`src/cmix/data.py`): utilities for loading model outputs, alignments, and templates.
 - **Utility functions** (`src/cmix/utils.py`): plotting, normalization, and grouped attribution scoring.
 - **Optional forced alignment** (`src/cmix/alignment/forced_alignment.py`): aligns HuBERT tokens to word spans using *torchaudio* MMS.
-
----
-
-## Motivation
-
-When evaluating multimodal models that mix **audio** and **text**, it is crucial to understand *which modality the model actually relies on*.  
-This repository provides a reproducible framework to:
-- Quantify audio vs. text influence via attribution maps.
-- Visualize token-level importance and word-grouped scores.
-- Compare different architectures (e.g., Chain-of-Thought vs. Cascade).
-
 ---
 
 ## Repository Structure
@@ -49,6 +69,9 @@ context-mixing-audio-text/
 │           └── README.md                   # Alignment documentation
 │
 └── README.md                               # Project documentation
+│
+└── images/                               # Images used in README.md
+
 ```
 
 ---
