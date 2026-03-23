@@ -58,6 +58,8 @@ context-mixing-audio-text/
 │
 ├── scripts/                                # SLURM or run scripts
 │
+├── sample_data/                            # Data samples for reproducibility
+│
 ├── src/
 │   └── cmix/
 │       ├── main.py                         # Main attribution runner
